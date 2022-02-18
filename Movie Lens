@@ -1,3 +1,4 @@
+
 ##########################################################
 # Create edx set, validation set (final hold-out test set)
 ##########################################################
@@ -16,11 +17,16 @@ library(data.table)
 # https://grouplens.org/datasets/movielens/10m/
 # http://files.grouplens.org/datasets/movielens/ml-10m.zip
 
+options(timeout=200)
+
 dl <- tempfile()
 download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
 
 ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
                  col.names = c("userId", "movieId", "rating", "timestamp"))
+
+
+
 
 movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
 colnames(movies) <- c("movieId", "title", "genres")
@@ -84,9 +90,6 @@ RMSE <- function(true_ratings, predicted_ratings)
       
       
 
-     
-     
-  
   
       
       #Fourth Model     
@@ -103,7 +106,7 @@ RMSE <- function(true_ratings, predicted_ratings)
            
           
            
-           ##### with year
+   ##### Fifth with year
            
            edx <- mutate(edx,year=substr(title,nchar(title)-5,nchar(title)-1))
            validation <- mutate(validation,year=substr(title,nchar(title)-5,nchar(title)-1))
@@ -127,8 +130,75 @@ RMSE <- function(true_ratings, predicted_ratings)
           rm(all_average_with_b,rating_with_genres,rating_with_user,rating_with_year)           
            
            
+# Sixth model with lambda          
+          
+         
+          lambdas <- seq(0, 10, 0.25)
+          
+          RMSE_L <- sapply(lambdas, function(l){
+            
+            
+            counter <- (l/10)*100
+            
+            cat(paste("\rProgress",counter," %"))
+            Sys.sleep(1)
+            
+            all_average_with_b <- edx %>% 
+              group_by(movieId) %>%  
+              summarize(b = sum(rating - all_average)/(n()+l))   
+            
+
+            
+            rating_with_user <- edx %>% 
+              left_join(all_average_with_b, by='movieId') %>%
+              group_by(userId) %>%
+              summarize(c = sum(rating - all_average - b)/(n()+l))  
+            
+            
+            rating_with_genres <- edx %>% 
+              left_join(all_average_with_b, by='movieId') %>%
+              left_join(rating_with_user, by='userId') %>%
+              group_by(genres) %>%
+              summarize(d = sum(rating - all_average - b - c)/(n()+l))
+    
+            
+            
+            
+            rating_with_year <- edx %>% 
+              left_join(all_average_with_b, by='movieId') %>%
+              left_join(rating_with_user, by='userId') %>%
+              left_join(rating_with_genres, by='genres') %>%
+              group_by(year) %>%
+              summarize(e = sum(rating - all_average - b - c-d)/(n()+l))
+            
+            
+            
+            
+            final_predicted <- validation %>% 
+              left_join(all_average_with_b, by='movieId') %>%
+              left_join(rating_with_user, by='userId') %>%
+              left_join(rating_with_genres, by='genres') %>%
+              left_join(rating_with_year, by='year') %>%
+              mutate(pred = all_average + b + c  +d +e) %>%
+              .$pred
+            
+            rm(all_average_with_b,rating_with_user,rating_with_genres,rating_with_year)           
+            
+            
+            return(RMSE(final_predicted, validation$rating))
+            
            
 
-           model_gen_rmse <- RMSE(year_predicted, validation$rating)
-           model_gen_rmse
+          })
+          
+          print("Finished")
+          
+          
+          qplot(lambdas, RMSE_L)  
+          
+          lambda <- lambdas[which.min(RMSE_L)]
+          lambda
+          
+          min(RMSE_L)
+          
            

@@ -1,3 +1,6 @@
+# Movie Lens edX Projext
+# Course: HarvardX PH125.9x Data Science: Capstone
+# Author: Robert Wieckowski
 
 ##########################################################
 # Create edx set, validation set (final hold-out test set)
@@ -17,16 +20,14 @@ library(data.table)
 # https://grouplens.org/datasets/movielens/10m/
 # http://files.grouplens.org/datasets/movielens/ml-10m.zip
 
-options(timeout=200)
+# Timeot for download has been extended to 300 seconds from standard 60, allowing full download in case internet connection might be slower
+options(timeout=300)
 
 dl <- tempfile()
 download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
 
 ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
                  col.names = c("userId", "movieId", "rating", "timestamp"))
-
-
-
 
 movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
 colnames(movies) <- c("movieId", "title", "genres")
@@ -35,9 +36,6 @@ colnames(movies) <- c("movieId", "title", "genres")
 movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(movieId),
                                            title = as.character(title),
                                            genres = as.character(genres))
-
-
-
 
 movielens <- left_join(ratings, movies, by = "movieId")
 
@@ -60,145 +58,298 @@ rm(dl, ratings, movies, test_index, temp, movielens, removed)
 
 #Define RMSE function
 RMSE <- function(true_ratings, predicted_ratings)
-                {sqrt(mean((true_ratings - predicted_ratings)^2))}
+{sqrt(mean((true_ratings - predicted_ratings)^2))}
 
-#First model
 
-      #First model being mean of all ratings
-      all_average <- mean(edx$rating)
+# Summary of our data
+head(edx, 5)
+summary(edx)
+
+
+#Adding movie release year from title both to edx and validations set.
+edx <- edx %>% mutate(year=substr(title,nchar(title)-4,nchar(title)-1)) %>% mutate(year = as.numeric(year))
+validation <- validation %>% mutate(year=substr(title,nchar(title)-4,nchar(title)-1)) %>% mutate(year = as.numeric(year))
+
+
+# Histogram showing number of each ratings.
+edx %>%
+  ggplot(aes(rating)) +
+  geom_histogram(binwidth = 0.5, color = "black",fill = "#E69F00",bins=30) +
+  xlab("Rating") +
+  ylab("Count") +
+  ggtitle("Ratings Histogram") +
+  theme(axis.text.x = element_text(face="bold", color="black",size=14, ),
+        axis.text.y = element_text(face="bold", color="black",size=8, ))
+
+# Histogram showing ratings per user amount.
+edx %>% 
+  count(userId) %>%
+  ggplot(aes(n)) +
+  geom_histogram(color = "black",fill = "#E69F00",bins=30) +
+  scale_x_log10() +
+  xlab("# Ratings") +
+  ylab("# Users") +
+  ggtitle("Numbers of ratings per user amount") +
+  theme(axis.text.x = element_text(face="bold", color="black",size=14, ),
+        axis.text.y = element_text(face="bold", color="black",size=8, ))
+  
+  
+ 
+ # Histogram showing number of ratings per movies.
+edx %>% 
+  count(movieId) %>%
+  ggplot(aes(n)) +
+  geom_histogram(color = "black",fill = "#E69F00",bins=30) +
+  scale_x_log10() +
+  xlab("# Ratings") +
+  ylab("# Movies") +
+  ggtitle("Number of ratings per movies") +
+  theme(axis.text.x = element_text(face="bold", color="black",size=14, ),
+        axis.text.y = element_text(face="bold", color="black",size=8, ))
+  
+
+# Histogram showing number of ratings per movie release year.
+  
+  edx %>%
+    ggplot(aes(year)) +
+    geom_histogram(binwidth = 1, color = "black",fill = "#E69F00",bins=30) +
+    xlab("# Ratings") +
+    ylab("# Movies") +
+    ggtitle("Ratings per movie produced year") +
+    theme(axis.text.x = element_text(face="bold", color="black",size=14, ),
+          axis.text.y = element_text(face="bold", color="black",size=8, ))
+
+# Plot showing average movie rating per year movie was released
+  
+edx %>% 
+  group_by(year) %>%
+  summarize(rating = mean(rating)) %>%
+  ggplot(aes(year, rating)) +
+  geom_point() +
+  geom_smooth(formula = y ~ x, method = "loess")+
+  xlab("# Year produced") +
+  ylab("# Average rating") +
+  ggtitle("Ratings per movie produced year") +
+  theme(axis.text.x = element_text(face="bold", color="black",size=14, ),
+        axis.text.y = element_text(face="bold", color="black",size=14, ))
+
+  
+# For model development we should not use validation set, we can do it only once final model has been defined.
+# We need some test data to check if development of our algorithm is going in good direction  
+# For it we will split edx set into train end test set, to see improvement when creating models
+  
+# Test set will be 10% of edx data.
+test_index <- createDataPartition(y = edx$rating, times = 1, p = 0.1, list = FALSE)
+edx_train <- edx[-test_index,]
+temp <- edx[test_index,]
+  
+# Make sure userId and movieId in test set are also in train set
+edx_test <- temp %>% 
+semi_join(edx_train, by = "movieId") %>%
+semi_join(edx_train, by = "userId")
+  
+# Add rows removed from validation set back into edx set
+removed <- anti_join(temp, edx_test)
+edx_train <- rbind(edx_train, removed)
+
+#First model - Mean of all ratings
+
+    #Calculation
+      all_average <- mean(edx_train$rating)
       all_average
+    #Model test
+      first_model <- RMSE(edx_test$rating, all_average)
+    #Saving results
+      rmse_results = data_frame(method = "First Model - Mean of all ratings", RMSE = first_model)
       
-
+#Second Model - added movieId consideration
       
-#Second Model
-      
-      #Second model being mean rating minus ....
-      all_average_with_b <- edx %>% 
+    #Calculation
+      all_average_with_b <- edx_train %>% 
         group_by(movieId) %>%  
-        summarize(b = mean(rating - all_average)) 
+        summarize(b = mean(rating - all_average))
+    #Saving outcome
+      predicted <- edx_test %>% 
+        left_join(all_average_with_b, by='movieId') %>%
+        mutate(pred = all_average + b   ) %>%
+        .$pred
+    #Model test
+      second_model <- RMSE(edx_test$rating,predicted)
+    #Saving results
+      rmse_results <- bind_rows(rmse_results,data_frame(method="Second Model - Previous +  Movie Considered", RMSE = second_model ))
+ 
+#Third Model - added userId consideration 
       
-
-
-      
-#Third Model      
-      
-      
-      rating_with_user <- edx %>% 
+    #Calculation
+      rating_with_user <- edx_train %>% 
         left_join(all_average_with_b, by='movieId') %>%
         group_by(userId) %>%
         summarize(c = mean(rating - all_average - b))
+    #Saving outcome
+      predicted <- edx_test %>% 
+        left_join(all_average_with_b, by='movieId') %>%
+        left_join(rating_with_user, by='userId') %>%
+        mutate(pred = all_average + b +c  ) %>%
+        .$pred
+    #Model test
+      third_model <- RMSE(edx_test$rating,predicted)
+    #Saving results
+      rmse_results <- bind_rows(rmse_results,data_frame(method="Third Model -Previous +  User Considered", RMSE = third_model ))
       
+#Fourth Model - added genres consideration
       
-
-  
-      
-      #Fourth Model     
-      
-           edx <- edx %>%
+      # For faster calculations we will mutate genres saved as strings into factors. 
+           edx <- edx_train %>%
                  mutate(genres = as.factor(genres))
-      
-      
-           rating_with_genres <- edx %>% 
+       #Calculation
+           rating_with_genres <- edx_train %>% 
              left_join(all_average_with_b, by='movieId') %>%
              left_join(rating_with_user, by='userId') %>%
              group_by(genres) %>%
              summarize(d = mean(rating - all_average - b - c))
+        #Saving outcome
+           predicted <- edx_test %>% 
+             left_join(all_average_with_b, by='movieId') %>%
+             left_join(rating_with_user, by='userId') %>%
+             left_join(rating_with_genres, by='genres') %>%
+             mutate(pred = all_average + b +c +d ) %>%
+             .$pred 
+        #Model test
+           fourth_model <- RMSE(edx_test$rating,predicted)
+         #Saving results
+           rmse_results <- bind_rows(rmse_results,data_frame(method="Fourth Model - Previous + Genres Considered", RMSE = fourth_model ))
            
-          
+  # Fifth model - added year released consideration
            
-   ##### Fifth with year
-           
-           edx <- mutate(edx,year=substr(title,nchar(title)-5,nchar(title)-1))
-           validation <- mutate(validation,year=substr(title,nchar(title)-5,nchar(title)-1))
-     
-           rating_with_year <- edx %>% 
+        #Calculation
+           rating_with_year <- edx_train %>% 
              left_join(all_average_with_b, by='movieId') %>%
              left_join(rating_with_user, by='userId') %>%
              left_join(rating_with_genres, by='genres') %>%
              group_by(year) %>%
              summarize(e = mean(rating - all_average - b - c-d))
-           
-           
-           year_predicted <- validation %>% 
+        #Saving outcome
+           predicted <- edx_test %>% 
              left_join(all_average_with_b, by='movieId') %>%
              left_join(rating_with_user, by='userId') %>%
              left_join(rating_with_genres, by='genres') %>%
              left_join(rating_with_year, by='year') %>%
-             mutate(pred = all_average + b + c + d + e) %>%
+             mutate(pred = all_average + b +c +d ) %>%
              .$pred
+        #Model test
+           fifth_model <- RMSE(edx_test$rating,predicted)
+        #Saving results
+           rmse_results <- bind_rows(rmse_results,data_frame(method="Fifth Model - Year", RMSE = fifth_model ))
+       
+# Sixth model - added lambda parameter          
           
-          rm(all_average_with_b,rating_with_genres,rating_with_user,rating_with_year)           
            
-           
-# Sixth model with lambda          
-          
-         
+          print("Calculations with Lambda")
           lambdas <- seq(0, 10, 0.25)
-          
-          RMSE_L <- sapply(lambdas, function(l){
+          sixth_model <- sapply(lambdas, function(l){
             
-            
+        # Counter for showing calculations progress
             counter <- (l/10)*100
             
             cat(paste("\rProgress",counter," %"))
             Sys.sleep(1)
             
-            all_average_with_b <- edx %>% 
+            
+        #Calculation
+            all_average_with_b <- edx_train %>% 
               group_by(movieId) %>%  
               summarize(b = sum(rating - all_average)/(n()+l))   
-            
 
-            
-            rating_with_user <- edx %>% 
+            rating_with_user <- edx_train %>% 
               left_join(all_average_with_b, by='movieId') %>%
               group_by(userId) %>%
               summarize(c = sum(rating - all_average - b)/(n()+l))  
             
-            
-            rating_with_genres <- edx %>% 
+            rating_with_genres <- edx_train %>% 
               left_join(all_average_with_b, by='movieId') %>%
               left_join(rating_with_user, by='userId') %>%
               group_by(genres) %>%
               summarize(d = sum(rating - all_average - b - c)/(n()+l))
-    
-            
-            
-            
-            rating_with_year <- edx %>% 
+
+            rating_with_year <- edx_train %>% 
               left_join(all_average_with_b, by='movieId') %>%
               left_join(rating_with_user, by='userId') %>%
               left_join(rating_with_genres, by='genres') %>%
               group_by(year) %>%
               summarize(e = sum(rating - all_average - b - c-d)/(n()+l))
             
-            
-            
-            
-            final_predicted <- validation %>% 
+        #Saving outcome
+            predicted <- edx_test %>% 
               left_join(all_average_with_b, by='movieId') %>%
               left_join(rating_with_user, by='userId') %>%
               left_join(rating_with_genres, by='genres') %>%
               left_join(rating_with_year, by='year') %>%
               mutate(pred = all_average + b + c  +d +e) %>%
               .$pred
+        #Removing temporary data before next loop.
+            rm(all_average_with_b,rating_with_user,rating_with_genres,rating_with_year)  
+        #Model test
+            return(RMSE( edx_test$rating,predicted))
             
-            rm(all_average_with_b,rating_with_user,rating_with_genres,rating_with_year)           
-            
-            
-            return(RMSE(final_predicted, validation$rating))
-            
-           
-
+            print("Finished Lambda Calculations")
           })
           
-          print("Finished")
-          
-          
-          qplot(lambdas, RMSE_L)  
-          
-          lambda <- lambdas[which.min(RMSE_L)]
+          cat("Minimum Final RMSE for Sixth Model",min(sixth_model))
+     
+        #Defining lambda for best RMSE result
+          lambda <- lambdas[which.min(sixth_model)]
           lambda
+        #Saving results
+          rmse_results <- bind_rows(rmse_results,data_frame(method="Sixth Model - added Lambda calculations", RMSE = min(sixth_model) ))
+          rmse_results
           
-          min(RMSE_L)
+        # Plot showing how RMSE is dependent from lambda
+          qplot(lambdas, sixth_model) +
+            xlab("Lambda") +
+            ylab("RMSE") + 
+            ggtitle("RMSE per Lambda - minimum with Lambda=",lambda)  
           
-           
+          
+ #   Final calculations      
+          
+        #Clearing all data used in previous calculations
+          rm(all_average_with_b,rating_with_user,rating_with_genres,rating_with_year)           
+
+        #Calculation
+          all_average_with_b <- edx %>% 
+            group_by(movieId) %>%  
+            summarize(b = sum(rating - all_average)/(n()+lambda))   
+
+          rating_with_user <- edx %>% 
+            left_join(all_average_with_b, by='movieId') %>%
+            group_by(userId) %>%
+            summarize(c = sum(rating - all_average - b)/(n()+lambda))  
+
+          rating_with_genres <- edx %>% 
+            left_join(all_average_with_b, by='movieId') %>%
+            left_join(rating_with_user, by='userId') %>%
+            group_by(genres) %>%
+            summarize(d = sum(rating - all_average - b - c)/(n()+lambda))
+          
+          rating_with_year <- edx %>% 
+            left_join(all_average_with_b, by='movieId') %>%
+            left_join(rating_with_user, by='userId') %>%
+            left_join(rating_with_genres, by='genres') %>%
+            group_by(year) %>%
+            summarize(e = sum(rating - all_average - b - c-d)/(n()+lambda))
+          
+        #Saving outcome
+          predicted_final <- validation %>% 
+            left_join(all_average_with_b, by='movieId') %>%
+            left_join(rating_with_user, by='userId') %>%
+            left_join(rating_with_genres, by='genres') %>%
+            left_join(rating_with_year, by='year') %>%
+            mutate(pred = all_average + b + c  +d +e) %>%
+            .$pred
+          
+        #Clearing all data used in previous calculations
+          rm(all_average_with_b,rating_with_user,rating_with_genres,rating_with_year)           
+          
+        #Getting final RMSE result
+          result <- RMSE(validation$rating,predicted_final)
+          cat("Final result RMSE", result)

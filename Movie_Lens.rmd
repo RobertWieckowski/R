@@ -1,1 +1,508 @@
+---
+title: "Movie Lens - edx Capstone Project"
+author: "Robert Wieckowski"
+date: "19/02/2022"
+output: pdf_document
+fig_caption: true
+number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+\newpage 
+
+\tableofcontents
+\listoffigures
+\listoftables
+
+
+## Introduction
+
+Movie Lens is one of two projects required to obtain Data Science Professional Certificate. Main subject of this project is to train and evaluate skills and knowledge required in course syllabus. Task is to create model predicting movie ratings based on data provided.
+
+## Data Overview
+Data used in this project is available for download as per course instructions. Minimum required libraries are also included. There is no change to part of code provided in course except changing timeout for download.
+After download there is requirement to name columns, and join movies and rating table together. Result will be split into edx (train) and validation (test) sets. Validation set will be 10 % of whole data. Set.seed parameter has been defined, allowing to get comparable results in each iteration.
+
+```{r ,echo=TRUE,message=FALSE,warning=FALSE}
+
+# Movie Lens edX Projext
+# Course: HarvardX PH125.9x Data Science: Capstone
+# Author: Robert Wieckowski
+
+##########################################################
+# Create edx set, validation set (final hold-out test set)
+##########################################################
+
+# Note: this process could take a couple of minutes
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(caret)
+library(data.table)
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+# Timeot for download has been extended to 300 seconds from standard 60, allowing full download in case internet connection might be slower
+options(timeout=300)
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+
+# if using R 3.6 or earlier:
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(movieId),
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Validation set will be 10% of MovieLens data
+set.seed(1, sample.kind="Rounding") # if using R 3.5 or earlier, use `set.seed(1)`
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+
+```
+
+
+For evaluation of our algorithm we will be using function RMSE (Root Mean Square Error) defined as:
+
+$$
+RMSE & =  $ \sqrt{     \overline { (True Ratings - Predicted Ratings)^2 }}$
+$$
+
+
+We will create RMSE function for future evaluations
+
+```{r , echo=TRUE,message=FALSE,warning=FALSE}
+#Define RMSE function
+RMSE <- function(true_ratings, predicted_ratings)
+{sqrt(mean((true_ratings - predicted_ratings)^2))}
+```
+
+
+We can examine our data and check if cleaning is needed.
+
+
+```{r , echo=TRUE}
+head(edx, 5)
+
+```
+
+```{r , echo=TRUE}
+summary(edx)
+```
+We can notice data does not require additional cleaning and is ready for our analysis.
+We can also see that we could subtract from title year movie was released, and possibly use it for our model.
+We need to remember to add it both to train and test sets
+
+```{r , echo=TRUE,message=FALSE,warning=FALSE}
+#Adding movie release year from title both to edx and validations set.
+edx <- edx %>% mutate(year=substr(title,nchar(title)-4,nchar(title)-1)) %>% mutate(year = as.numeric(year))
+validation <- validation %>% mutate(year=substr(title,nchar(title)-4,nchar(title)-1)) %>% mutate(year = as.numeric(year))
+```
+
+Visual display of our data will help us better understand it.
+
+Firstly we can show Count of each rating in our data set.
+
+```{r , echo=FALSE}
+# Histogram showing number of each ratings.
+edx %>%
+  ggplot(aes(rating)) +
+  theme_linedraw() +
+  geom_histogram(binwidth = 0.5, color = "black",fill = "#E69F00",bins=30) +
+  xlab("Rating") +
+  ylab("Count") +
+  ggtitle("Ratings Histogram") +
+  theme(axis.text.x = element_text(face="bold", color="black",size=14 ),
+        axis.text.y = element_text(face="bold", color="black",size=8 ))
+```
+  
+It is clear full number ratings are more popular than partial ones.
+
+We can also see how active were users, and how many ratings they provided.
+```{r , echo=FALSE}
+# Histogram showing ratings per user amount.
+edx %>% 
+  count(userId) %>%
+  ggplot(aes(n)) +
+  theme_linedraw() +
+  geom_histogram(color = "black",fill = "#E69F00",bins=30) +
+  scale_x_log10() +
+  xlab("# Ratings") +
+  ylab("# Users") +
+  ggtitle("Numbers of ratings per user amount") +
+  theme(axis.text.x = element_text(face="bold", color="black",size=14, ),
+        axis.text.y = element_text(face="bold", color="black",size=8, ))
+ 
+```
+
+
+
+
+Another interesting histogram shows us numbers of ratings per movie. 
+```{r , echo=FALSE}
+ # Histogram showing number of ratings per movies.
+edx %>% 
+  count(movieId) %>%
+  ggplot(aes(n)) +
+  theme_linedraw() +
+  geom_histogram(color = "black",fill = "#E69F00",bins=30) +
+  scale_x_log10() +
+  xlab("Ratings") +
+  ylab("Movies") +
+  ggtitle("Number of ratings per movies") +
+  theme(axis.text.x = element_text(face="bold", color="black",size=14, ),
+        axis.text.y = element_text(face="bold", color="black",size=8, ))
+```
+
+ 
+ 
+Another histogram will show us what era movies are mostly rated.
+```{r , echo=FALSE}
+# Histogram showing number of ratings per movie release year.
+  edx %>%
+    ggplot(aes(year)) +
+    theme_linedraw() +
+    geom_histogram(binwidth = 1, color = "black",fill = "#E69F00",bins=30) +
+    xlab("Ratings") +
+    ylab("Movies") +
+    ggtitle("Ratings per movie produced year") +
+    theme(axis.text.x = element_text(face="bold", color="black",size=14, ),
+          axis.text.y = element_text(face="bold", color="black",size=8, ))
+```
+ 
+ 
+ Plot showing average rating per movie released year.
+```{r , echo=FALSE} 
+# Plot showing average movie rating per year movie was released
+edx %>% 
+  group_by(year) %>%
+  summarize(rating = mean(rating)) %>%
+  ggplot(aes(year, rating)) +
+  theme_linedraw() +
+  geom_point(colour="blue") +
+  geom_smooth(formula = y ~ x, method = "loess",colour="#E69F00")+
+  xlab("Year released") +
+  ylab("Average rating") +
+  ggtitle("Ratings per movie produced year") +
+  theme(axis.text.x = element_text(face="bold", color="black",size=14, ),
+        axis.text.y = element_text(face="bold", color="black",size=14, ))
+```
+
+
+## Model development
+As per exam instructions validation set should only be used to test  result of our final algorithm. However we want to have possibility to check if our model development is going into good direction, and is delivering better result with each modification. To have this ability we will split edx set into train and test set. Test set will be 10% of whole edx set.
+```{r , echo=TRUE,message=FALSE,warning=FALSE} 
+# For model development we should not use validation set, we can do it only once final model has been defined.
+# We need some test data to check if development of our algorithm is going in good direction  
+# For it we will split edx set into train end test set, to see improvement when creating models
+  
+# Test set will be 10% of edx data.
+test_index <- createDataPartition(y = edx$rating, times = 1, p = 0.1, list = FALSE)
+edx_train <- edx[-test_index,]
+temp <- edx[test_index,]
+  
+# Make sure userId and movieId in test set are also in train set
+edx_test <- temp %>% 
+semi_join(edx_train, by = "movieId") %>%
+semi_join(edx_train, by = "userId")
+  
+# Add rows removed from validation set back into edx set
+removed <- anti_join(temp, edx_test)
+edx_train <- rbind(edx_train, removed)
+rm( temp, removed,test_index)
+```
+
+
+Our first model will take mean of all movie ratings. It is simplest model, which result will be saved into rmse_result table for final analysis.
+```{r , echo=TRUE,message=FALSE,warning=FALSE} 
+#First model - Mean of all ratings
+
+    #Calculation
+      all_average <- mean(edx_train$rating)
+     
+    #Model test
+      first_model <- RMSE(edx_test$rating, all_average)
+    #Saving results
+      rmse_results = data_frame(method = "First Model - Mean of all ratings", RMSE = first_model)
+```
+
+Second model will be modification of first one, in which we will also consider each movie. Ratings can be different per different movies. One movies are better taken by audience, with other ones less. Results of this algorithm will be saved into rmse_results table.
+```{r , echo=TRUE,message=FALSE,warning=FALSE} 
+#Second Model - added movieId consideration
+      
+    #Calculation
+      all_average_with_b <- edx_train %>% 
+        group_by(movieId) %>%  
+        summarize(b = mean(rating - all_average))
+    #Saving outcome
+      predicted <- edx_test %>% 
+        left_join(all_average_with_b, by='movieId') %>%
+        mutate(pred = all_average + b   ) %>%
+        .$pred
+    #Model test
+      second_model <- RMSE(edx_test$rating,predicted)
+    #Saving results
+      rmse_results <- bind_rows(rmse_results,data_frame(method="Second Model - Previous +  Movie Considered", RMSE = second_model ))
+```
+
+
+Third model will be modified second model with users taken into consideration. Ratings can vary per user, each one of them can have own criteria they are rating movies. Model results will be saved into our rmse_results table for further evaluation.
+```{r , echo=TRUE,message=FALSE,warning=FALSE} 
+#Third Model - added userId consideration 
+      
+    #Calculation
+      rating_with_user <- edx_train %>% 
+        left_join(all_average_with_b, by='movieId') %>%
+        group_by(userId) %>%
+        summarize(c = mean(rating - all_average - b))
+    #Saving outcome
+      predicted <- edx_test %>% 
+        left_join(all_average_with_b, by='movieId') %>%
+        left_join(rating_with_user, by='userId') %>%
+        mutate(pred = all_average + b +c  ) %>%
+        .$pred
+    #Model test
+      third_model <- RMSE(edx_test$rating,predicted)
+    #Saving results
+      rmse_results <- bind_rows(rmse_results,data_frame(method="Third Model -Previous +  User Considered", RMSE = third_model ))
+```
+
+Fourth model is modification of third one with movie genres considered in calculations. Our valuation will show us, if accounting genres into final rating has got an impact into model results. We also change genres column into factors, to avoid string modifications.
+```{r , echo=TRUE,message=FALSE,warning=FALSE} 
+#Fourth Model - added genres consideration
+      
+      # For faster calculations we will mutate genres saved as strings into factors. 
+           edx <- edx_train %>%
+                 mutate(genres = as.factor(genres))
+       #Calculation
+           rating_with_genres <- edx_train %>% 
+             left_join(all_average_with_b, by='movieId') %>%
+             left_join(rating_with_user, by='userId') %>%
+             group_by(genres) %>%
+             summarize(d = mean(rating - all_average - b - c))
+        #Saving outcome
+           predicted <- edx_test %>% 
+             left_join(all_average_with_b, by='movieId') %>%
+             left_join(rating_with_user, by='userId') %>%
+             left_join(rating_with_genres, by='genres') %>%
+             mutate(pred = all_average + b +c +d ) %>%
+             .$pred 
+        #Model test
+           fourth_model <- RMSE(edx_test$rating,predicted)
+         #Saving results
+           rmse_results <- bind_rows(rmse_results,data_frame(method="Fourth Model - Previous + Genres Considered", RMSE = fourth_model ))
+```
+
+Fifth model is also considering year in which movie was release. From plot "Ratings per movie produced year" we can see that average movie rating is different for each year movie was released, having peak  with movies produced between 1940 and 1950.
+```{r , echo=TRUE,message=FALSE,warning=FALSE} 
+# Fifth model - added year released consideration
+           
+        #Calculation
+           rating_with_year <- edx_train %>% 
+             left_join(all_average_with_b, by='movieId') %>%
+             left_join(rating_with_user, by='userId') %>%
+             left_join(rating_with_genres, by='genres') %>%
+             group_by(year) %>%
+             summarize(e = mean(rating - all_average - b - c-d))
+        #Saving outcome
+           predicted <- edx_test %>% 
+             left_join(all_average_with_b, by='movieId') %>%
+             left_join(rating_with_user, by='userId') %>%
+             left_join(rating_with_genres, by='genres') %>%
+             left_join(rating_with_year, by='year') %>%
+             mutate(pred = all_average + b +c +d ) %>%
+             .$pred
+        #Model test
+           fifth_model <- RMSE(edx_test$rating,predicted)
+        #Saving results
+           rmse_results <- bind_rows(rmse_results,data_frame(method="Fifth Model - Year", RMSE = fifth_model ))
+```      
+
+We can also use regularisation in our sixth model. Ratings can be influenced by movies with only few of them. Our calculations will allow us to examine which Lambda parameter will deliver best RMSE results. As model might take some time to run, there is convenient counter showing calculations progress. 
+```{r , echo=TRUE,message=FALSE,warning=FALSE,results = 'hide'} 
+# Sixth model - added lambda parameter          
+          
+           
+          print("Calculations with Lambda")
+          lambdas <- seq(0, 10, 0.25)
+          sixth_model <- sapply(lambdas, function(l){
+            
+        # Counter for showing calculations progress
+            counter <- (l/10)*100
+            
+            cat(paste("\rProgress",counter," %"))
+            Sys.sleep(1)
+            
+        #Calculation
+            all_average_with_b <- edx_train %>% 
+              group_by(movieId) %>%  
+              summarize(b = sum(rating - all_average)/(n()+l))   
+
+            rating_with_user <- edx_train %>% 
+              left_join(all_average_with_b, by='movieId') %>%
+              group_by(userId) %>%
+              summarize(c = sum(rating - all_average - b)/(n()+l))  
+            
+            rating_with_genres <- edx_train %>% 
+              left_join(all_average_with_b, by='movieId') %>%
+              left_join(rating_with_user, by='userId') %>%
+              group_by(genres) %>%
+              summarize(d = sum(rating - all_average - b - c)/(n()+l))
+
+            rating_with_year <- edx_train %>% 
+              left_join(all_average_with_b, by='movieId') %>%
+              left_join(rating_with_user, by='userId') %>%
+              left_join(rating_with_genres, by='genres') %>%
+              group_by(year) %>%
+              summarize(e = sum(rating - all_average - b - c-d)/(n()+l))
+            
+        #Saving outcome
+            predicted <- edx_test %>% 
+              left_join(all_average_with_b, by='movieId') %>%
+              left_join(rating_with_user, by='userId') %>%
+              left_join(rating_with_genres, by='genres') %>%
+              left_join(rating_with_year, by='year') %>%
+              mutate(pred = all_average + b + c  +d +e) %>%
+              .$pred
+        #Removing temporary data before next loop.
+            rm(all_average_with_b,rating_with_user,rating_with_genres,rating_with_year)  
+        #Model test
+            return(RMSE( edx_test$rating,predicted))
+            
+            print("Finished Lambda Calculations")
+          })
+```            
+
+
+After running all models we can have a quick look into best RMSE result with lambda parameter.
+```{r , echo=TRUE,warning=FALSE} 
+    cat("Minimum Final RMSE for Sixth Model",min(sixth_model))
+```
+
+
+We want to also know what lambda value delivers best result, as it could be used in our final model
+```{r , echo=TRUE,warning=FALSE}
+#Defining lambda for best RMSE result
+          lambda <- lambdas[which.min(sixth_model)]
+          lambda
+```          
+
+Best result of sixth model can be saved into rmse_results table for final evaluation.           
+```{r , echo=TRUE,warning=FALSE}          
+        #Saving results
+          rmse_results <- bind_rows(rmse_results,data_frame(method="Sixth Model - added Lambda calculations", RMSE = min(sixth_model) ))
+```
+
+Convenient plot of RMSE per lambda parameter also shows us, that regularisation approach delivers better results with lambda value mentioned two sections above.
+    
+```{r , echo=FALSE}                    
+# Plot showing how RMSE is dependent from lambda
+          qplot(lambdas, sixth_model) +
+            xlab("Lambda") +
+            ylab("RMSE") + 
+            ggtitle(paste0("RMSE per Lambda - minimum with Lambda = ",lambda)  )
+```
+
+
+## Results - model development
+We want to know which model delivers best results. We can display our rmse_result table with clearly stated sixth model deliver best results. It will be use for our final algorithm training on edx set and model evaluation on validation set.
+
+```{r , echo=TRUE,warning=FALSE} 
+#Final model evaluation
+          rmse_results    
+```
+
+## Final algorithm training
+Model training and evaluation will be done with lambda parameter 
+
+```{r , echo=TRUE,message=FALSE,warning=FALSE} 
+lambda
+```
+
+Final model calculations with full code as below.
+```{r , echo=TRUE,message=FALSE,warning=FALSE} 
+#   Final calculations      
+          
+        #Clearing all data used in previous calculations
+          rm(all_average_with_b,rating_with_user,rating_with_genres,rating_with_year)           
+
+        #Calculation
+          all_average_with_b <- edx %>% 
+            group_by(movieId) %>%  
+            summarize(b = sum(rating - all_average)/(n()+lambda))   
+
+          rating_with_user <- edx %>% 
+            left_join(all_average_with_b, by='movieId') %>%
+            group_by(userId) %>%
+            summarize(c = sum(rating - all_average - b)/(n()+lambda))  
+
+          rating_with_genres <- edx %>% 
+            left_join(all_average_with_b, by='movieId') %>%
+            left_join(rating_with_user, by='userId') %>%
+            group_by(genres) %>%
+            summarize(d = sum(rating - all_average - b - c)/(n()+lambda))
+          
+          rating_with_year <- edx %>% 
+            left_join(all_average_with_b, by='movieId') %>%
+            left_join(rating_with_user, by='userId') %>%
+            left_join(rating_with_genres, by='genres') %>%
+            group_by(year) %>%
+            summarize(e = sum(rating - all_average - b - c-d)/(n()+lambda))
+          
+        #Saving outcome
+          predicted_final <- validation %>% 
+            left_join(all_average_with_b, by='movieId') %>%
+            left_join(rating_with_user, by='userId') %>%
+            left_join(rating_with_genres, by='genres') %>%
+            left_join(rating_with_year, by='year') %>%
+            mutate(pred = all_average + b + c  +d +e) %>%
+            .$pred
+          
+        #Clearing all data used in previous calculations
+          rm(all_average_with_b,rating_with_user,rating_with_genres,rating_with_year)           
+```
+
+
+## Final Results
+Final model RMSE result.
+```{r , echo=TRUE} 
+#Getting final RMSE result
+          result <- RMSE(validation$rating,predicted_final)
+          cat("Final result RMSE", result)
+```
+
+
+
+
+## Conclusion
+We developed our model using several factors : movieId, userId, genre, year released and regularised with lambda parameter. Display of rmse_results table showed us its development, stating that sixth model delivers best results.
+
 

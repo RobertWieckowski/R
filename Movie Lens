@@ -60,31 +60,30 @@ rm(dl, ratings, movies, test_index, temp, movielens, removed)
 RMSE <- function(true_ratings, predicted_ratings)
 {sqrt(mean((true_ratings - predicted_ratings)^2))}
 
-
 # Summary of our data
 head(edx, 5)
 summary(edx)
-
 
 #Adding movie release year from title both to edx and validations set.
 edx <- edx %>% mutate(year=substr(title,nchar(title)-4,nchar(title)-1)) %>% mutate(year = as.numeric(year))
 validation <- validation %>% mutate(year=substr(title,nchar(title)-4,nchar(title)-1)) %>% mutate(year = as.numeric(year))
 
-
 # Histogram showing number of each ratings.
 edx %>%
   ggplot(aes(rating)) +
+  theme_linedraw() +
   geom_histogram(binwidth = 0.5, color = "black",fill = "#E69F00",bins=30) +
   xlab("Rating") +
   ylab("Count") +
   ggtitle("Ratings Histogram") +
-  theme(axis.text.x = element_text(face="bold", color="black",size=14, ),
-        axis.text.y = element_text(face="bold", color="black",size=8, ))
+  theme(axis.text.x = element_text(face="bold", color="black",size=14 ),
+        axis.text.y = element_text(face="bold", color="black",size=8 ))
 
 # Histogram showing ratings per user amount.
 edx %>% 
   count(userId) %>%
   ggplot(aes(n)) +
+  theme_linedraw() +
   geom_histogram(color = "black",fill = "#E69F00",bins=30) +
   scale_x_log10() +
   xlab("# Ratings") +
@@ -92,43 +91,41 @@ edx %>%
   ggtitle("Numbers of ratings per user amount") +
   theme(axis.text.x = element_text(face="bold", color="black",size=14, ),
         axis.text.y = element_text(face="bold", color="black",size=8, ))
-  
-  
- 
+
  # Histogram showing number of ratings per movies.
 edx %>% 
   count(movieId) %>%
   ggplot(aes(n)) +
+  theme_linedraw() +
   geom_histogram(color = "black",fill = "#E69F00",bins=30) +
   scale_x_log10() +
-  xlab("# Ratings") +
-  ylab("# Movies") +
+  xlab("Ratings") +
+  ylab("Movies") +
   ggtitle("Number of ratings per movies") +
   theme(axis.text.x = element_text(face="bold", color="black",size=14, ),
         axis.text.y = element_text(face="bold", color="black",size=8, ))
   
-
 # Histogram showing number of ratings per movie release year.
-  
   edx %>%
     ggplot(aes(year)) +
+    theme_linedraw() +
     geom_histogram(binwidth = 1, color = "black",fill = "#E69F00",bins=30) +
-    xlab("# Ratings") +
-    ylab("# Movies") +
+    xlab("Ratings") +
+    ylab("Movies") +
     ggtitle("Ratings per movie produced year") +
     theme(axis.text.x = element_text(face="bold", color="black",size=14, ),
           axis.text.y = element_text(face="bold", color="black",size=8, ))
 
 # Plot showing average movie rating per year movie was released
-  
 edx %>% 
   group_by(year) %>%
   summarize(rating = mean(rating)) %>%
   ggplot(aes(year, rating)) +
-  geom_point() +
-  geom_smooth(formula = y ~ x, method = "loess")+
-  xlab("# Year produced") +
-  ylab("# Average rating") +
+  theme_linedraw() +
+  geom_point(colour="blue") +
+  geom_smooth(formula = y ~ x, method = "loess",colour="#E69F00")+
+  xlab("Year released") +
+  ylab("Average rating") +
   ggtitle("Ratings per movie produced year") +
   theme(axis.text.x = element_text(face="bold", color="black",size=14, ),
         axis.text.y = element_text(face="bold", color="black",size=14, ))
@@ -151,12 +148,12 @@ semi_join(edx_train, by = "userId")
 # Add rows removed from validation set back into edx set
 removed <- anti_join(temp, edx_test)
 edx_train <- rbind(edx_train, removed)
+rm( temp, removed,test_index)
 
 #First model - Mean of all ratings
 
     #Calculation
       all_average <- mean(edx_train$rating)
-      all_average
     #Model test
       first_model <- RMSE(edx_test$rating, all_average)
     #Saving results
@@ -307,9 +304,11 @@ edx_train <- rbind(edx_train, removed)
           qplot(lambdas, sixth_model) +
             xlab("Lambda") +
             ylab("RMSE") + 
-            ggtitle("RMSE per Lambda - minimum with Lambda=",lambda)  
+            ggtitle(paste0("RMSE per Lambda - minimum with Lambda = ",lambda)  )
           
-          
+#Final model evaluation
+          rmse_results         
+        
  #   Final calculations      
           
         #Clearing all data used in previous calculations
@@ -350,6 +349,7 @@ edx_train <- rbind(edx_train, removed)
         #Clearing all data used in previous calculations
           rm(all_average_with_b,rating_with_user,rating_with_genres,rating_with_year)           
           
-        #Getting final RMSE result
+#Getting final RMSE result
           result <- RMSE(validation$rating,predicted_final)
           cat("Final result RMSE", result)
+           

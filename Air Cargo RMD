@@ -1,0 +1,308 @@
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(dplyr)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(caret)
+library(dplyr)
+
+#  Source of data
+#  https://www.transtats.bts.gov/DL_SelectFields.asp?gnoyr_VQ=FIL&QO_fu146_anzr=Nv4%20Pn44vr45
+
+# Files avilable in Github repo
+# https://github.com/RobertWieckowski/R
+
+
+
+#  Unzip Flights data and Passenger data and save it in single data frame
+  raw_data <-
+            list.files(pattern = "*.zip") %>% 
+            map_df(~read_csv(.))
+
+#  Find NA values
+ sapply(raw_data, function(x) sum(is.na(x)))
+ 
+#  Remove column 37 which is entirely NA ans find NA again
+  raw_data = select(raw_data,-37)
+  sapply(raw_data, function(x) sum(is.na(x)))
+ 
+# After one more check we have got 358 rows at most with NA data, so we can remove it as well.
+  raw_data <- raw_data[rowSums(is.na(raw_data)) == 0,]
+
+  raw_data = raw_data %>%
+  group_by(AIRLINE_ID) %>%
+  mutate(total_for_airline = sum(FREIGHT)) %>%
+  filter(total_for_airline > 0 )
+
+
+# Find biggest freight airlines in US market
+  biggest_freight_2019 <- aggregate(raw_data$FREIGHT, by=list(Airline=raw_data$CARRIER_NAME), FUN=sum) %>%
+  arrange(-x) %>%
+  mutate(x=x*100/sum(raw_data$FREIGHT)) %>%
+  head(10) %>%
+  print()
+
+# Most popular US routes
+  most_popular <- raw_data[c("ORIGIN_CITY_NAME","DEST_CITY_NAME")]
+  most_popular<-  most_popular %>% group_by(ORIGIN_CITY_NAME,DEST_CITY_NAME) %>%
+  summarize(Count = n()) 
+
+  most_popular <-most_popular[order(-most_popular$Count),] 
+  most_popular <- head(most_popular,30) %>% print()
+
+# Flight per distance group
+  ggplot(data = raw_data) + geom_bar(mapping  = aes(x=DISTANCE_GROUP*500,fill = CLASS))+
+  xlab("Flight Distance (miles)") +
+  ylab("Amount of flights ") 
+
+#Passengers by year
+  passengers_by_year <- aggregate(raw_data$PASSENGERS, by=list(Year=raw_data$YEAR), FUN=sum)
+  ggplot(data = passengers_by_year, aes(x=Year, y=x)) +
+  geom_line(color = "#E69F00")+
+  xlab("Year") +
+    ylab("Passengers Moved") +
+    ggtitle("Passengers moved per year") +
+    theme(axis.text.x = element_text(face="bold", color="black",size=14, ),
+          axis.text.y = element_text(face="bold", color="black",size=8, ))
+
+#Freight by year
+  freight_by_year <- aggregate(raw_data$FREIGHT, by=list(Year=raw_data$YEAR), FUN=sum)
+  ggplot(data = freight_by_year, aes(x=Year, y=x)) +
+  geom_line(color = "#E69F00")+
+    xlab("Year") +
+    ylab("Freight Moved") +
+    ggtitle("Passengers moved per year") +
+    theme(axis.text.x = element_text(face="bold", color="black",size=14, ),
+          axis.text.y = element_text(face="bold", color="black",size=8, ))
+  
+#Mail by year
+  mail_by_year <- aggregate(raw_data$MAIL, by=list(Year=raw_data$YEAR), FUN=sum)
+  ggplot(data = mail_by_year, aes(x=Year, y=x)) +
+  geom_line(color = "#E69F00")+
+    xlab("Year") +
+    ylab("Mail Moved") +
+    ggtitle("Mail moved per year") +
+    theme(axis.text.x = element_text(face="bold", color="black",size=14, ),
+          axis.text.y = element_text(face="bold", color="black",size=8, ))
+
+# Split data 
+# Validation set will be 30% of our data
+  test_index <- createDataPartition(y = raw_data$FREIGHT, times = 1, p = 0.3, list = FALSE)
+ train_set <- raw_data[-test_index,]
+ temp <- raw_data[test_index,]
+ 
+# Make sure each airline, origin and destination  in test set are also in train set
+ test_set <- temp %>% 
+   semi_join(raw_data, by = "AIRLINE_ID") %>%
+   semi_join(raw_data, by = "ORIGIN") %>%
+   semi_join(raw_data, by = "DEST")
+   
+# Add rows removed from test set back into train set
+  removed <- anti_join(temp, test_set)
+ train_set <- rbind(train_set, removed)
+ 
+ rm( test_index, raw_data, removed)
+ 
+#Define scatter index (SI) function
+ SI <- function(true_ratings, predicted_ratings)
+ {sqrt(mean((true_ratings - predicted_ratings)^2,na.rm = TRUE))/mean(true_ratings)} 
+
+#First model - Mean
+     
+     #Calculation
+     average_freight <- mean(train_set$FREIGHT)
+     #Model test
+     first_model <- SI(test_set$FREIGHT, average_freight)
+     #Saving results
+     si_results = tibble(method = "First Model - Mean", SI = first_model)
+ 
+#Second model - Airline
+     
+     #Calculation
+     average_per_airline <- train_set %>%
+       group_by(AIRLINE_ID) %>%
+       summarize(airline = mean(FREIGHT - average_freight))
+
+     predicted <- test_set %>% 
+       left_join(average_per_airline, by='AIRLINE_ID') %>%
+       mutate(pred = average_freight + airline   ) %>%
+       .$pred
+     #Model test
+     second_model <- SI(test_set$FREIGHT, predicted)
+     #Saving results
+     si_results <- bind_rows(si_results,tibble(method="Second Model - Added Airline", SI = second_model ))
+     
+#Third Model - Origin
+     
+     #Calculation
+     average_with_distance_group <- train_set %>%
+       left_join(average_per_airline, by='AIRLINE_ID') %>%
+       group_by(ORIGIN) %>%
+       summarize( origin = mean(average_freight - airline))
+
+     predicted <- test_set %>% 
+       left_join(average_per_airline, by='AIRLINE_ID') %>%
+       left_join(average_with_distance_group , by='ORIGIN') %>%
+       mutate(pred = average_freight + airline + origin  ) %>%
+       .$pred
+     
+     #Model test
+     third_model <- SI(test_set$FREIGHT,predicted)
+     #Saving results
+     si_results <- bind_rows(si_results,tibble(method="Third Model - Added Origin", SI = third_model ))
+
+#Fourth Model - Destination
+     
+     #Calculation  
+     average_with_class <- train_set %>%
+       left_join(average_per_airline, by='AIRLINE_ID') %>%
+       left_join(average_with_distance_group, by='ORIGIN') %>%
+       group_by(DEST) %>%
+       summarize( destination = mean(average_freight - airline -  origin))
+
+     predicted <- test_set %>% 
+       left_join(average_per_airline, by='AIRLINE_ID') %>%
+       left_join(average_with_distance_group , by='ORIGIN') %>%
+       left_join(average_with_class , by='DEST') %>%
+       mutate(pred = average_freight +airline + origin + destination  ) %>%
+       .$pred
+     #Model test
+     fourth_model <- SI(test_set$FREIGHT,predicted)
+     #Saving results
+     si_results <- bind_rows(si_results,tibble(method="Fourth Model - Added Destination", SI = fourth_model ))
+     
+#Fifth Model - Year
+     
+     #Calculation 
+     average_with_year <- train_set %>%
+       left_join(average_per_airline, by='AIRLINE_ID') %>%
+       left_join(average_with_distance_group , by='ORIGIN') %>%
+       left_join(average_with_class , by='DEST') %>%
+       group_by(YEAR) %>%
+       summarize( year = mean(average_freight - airline - origin - destination))
+
+     predicted <- test_set %>% 
+       left_join(average_per_airline, by='AIRLINE_ID') %>%
+       left_join(average_with_distance_group , by='ORIGIN') %>%
+       left_join(average_with_class , by='DEST') %>%
+       left_join(average_with_year , by='YEAR') %>%
+       mutate(pred = average_freight + airline + origin + destination + year  ) %>%
+       .$pred
+     #Model test
+     fifth_model <- SI(test_set$FREIGHT,predicted)
+     #Saving results
+     si_results <- bind_rows(si_results,tibble(method="Fifth Model - Added Year", SI = fifth_model ))
+     
+# Sixth Model - Month
+     
+     #Calculation 
+     average_with_month <- train_set %>%
+       left_join(average_per_airline, by='AIRLINE_ID') %>%
+       left_join(average_with_distance_group , by='ORIGIN') %>%
+       left_join(average_with_class , by='DEST') %>%
+       left_join(average_with_year , by='YEAR') %>%
+       group_by(MONTH) %>%
+       summarize( month = mean(average_freight - airline - origin - destination- year))
+
+     predicted <- test_set %>% 
+       left_join(average_per_airline, by='AIRLINE_ID') %>%
+       left_join(average_with_distance_group , by='ORIGIN') %>%
+       left_join(average_with_class , by='DEST') %>%
+       left_join(average_with_year , by='YEAR') %>%
+       left_join(average_with_month , by='MONTH') %>%
+       mutate(pred = average_freight + airline + origin + destination + year-month  ) %>%
+       .$pred
+     #Model test
+     sixth_model <- SI(test_set$FREIGHT,predicted)
+     #Saving results
+     si_results <- bind_rows(si_results,tibble(method="Sixth Model - Added Month", SI = sixth_model ))
+     
+# Seventh Model - Carrier Group
+     
+     #Calculation 
+     average_with_group <- train_set %>%
+       left_join(average_per_airline, by='AIRLINE_ID') %>%
+       left_join(average_with_distance_group , by='ORIGIN') %>%
+       left_join(average_with_class , by='DEST') %>%
+       left_join(average_with_year , by='YEAR') %>%
+       left_join(average_with_month , by='MONTH') %>%
+       group_by(CARRIER_GROUP) %>%
+       summarize( group = mean(average_freight - airline - origin - destination- year - month))
+
+     predicted <- test_set %>% 
+       left_join(average_per_airline, by='AIRLINE_ID') %>%
+       left_join(average_with_distance_group , by='ORIGIN') %>%
+       left_join(average_with_class , by='DEST') %>%
+       left_join(average_with_year , by='YEAR') %>%
+       left_join(average_with_month , by='MONTH') %>%
+       left_join(average_with_group , by='CARRIER_GROUP') %>%
+       mutate(pred = average_freight + airline + origin + destination + year+month+ group ) %>%
+       .$pred
+    #Model test
+     seventh_model <- SI(test_set$FREIGHT,predicted)
+     #Saving results
+     si_results <- bind_rows(si_results,tibble(method="Seventh Model - Added Carrier Group", SI = seventh_model ))
+     
+# Eight Model - Distance Group
+     
+     #Calculation   
+     average_with_or_state <- train_set %>%
+       left_join(average_per_airline, by='AIRLINE_ID') %>%
+       left_join(average_with_distance_group , by='ORIGIN') %>%
+       left_join(average_with_class , by='DEST') %>%
+       left_join(average_with_year , by='YEAR') %>%
+       left_join(average_with_month , by='MONTH') %>%
+       left_join(average_with_group , by='CARRIER_GROUP') %>%
+       group_by(DISTANCE_GROUP) %>%
+       summarize( distance = mean(average_freight - airline - origin + destination- year - month-group))
+     
+     predicted <- test_set %>% 
+       left_join(average_per_airline, by='AIRLINE_ID') %>%
+       left_join(average_with_distance_group , by='ORIGIN') %>%
+       left_join(average_with_class , by='DEST') %>%
+       left_join(average_with_year , by='YEAR') %>%
+       left_join(average_with_month , by='MONTH') %>%
+       left_join(average_with_group , by='CARRIER_GROUP') %>%
+       left_join(average_with_or_state , by='DISTANCE_GROUP') %>%
+       mutate(pred = average_freight + airline + origin + destination + year+month+ group+distance ) %>%
+       .$pred
+     #Model test
+     eigth_model <- SI(test_set$FREIGHT,predicted)
+     #Saving results
+     si_results <- bind_rows(si_results,tibble(method="Eigth Model - Added Distance Group", SI = eigth_model ))
+   
+# Ninth Model - Airline Class
+     
+     #Calculation   
+     average_with_dest_state <- train_set %>%
+       left_join(average_per_airline, by='AIRLINE_ID') %>%
+       left_join(average_with_distance_group , by='ORIGIN') %>%
+       left_join(average_with_class , by='DEST') %>%
+       left_join(average_with_year , by='YEAR') %>%
+       left_join(average_with_month , by='MONTH') %>%
+       left_join(average_with_group , by='CARRIER_GROUP') %>%
+       left_join(average_with_or_state , by='DISTANCE_GROUP') %>%
+       group_by(CARRIER_GROUP) %>%
+       summarize( carrier_group = mean(average_freight - airline - origin + destination- year - month-group-distance))
+     
+     predicted <- test_set %>% 
+       left_join(average_per_airline, by='AIRLINE_ID') %>%
+       left_join(average_with_distance_group , by='ORIGIN') %>%
+       left_join(average_with_class , by='DEST') %>%
+       left_join(average_with_year , by='YEAR') %>%
+       left_join(average_with_month , by='MONTH') %>%
+       left_join(average_with_group , by='CARRIER_GROUP') %>%
+       left_join(average_with_or_state , by='DISTANCE_GROUP') %>%
+       left_join(average_with_dest_state , by='CARRIER_GROUP') %>%
+       mutate(pred = average_freight + airline + origin + destination + year+month+ group+distance+carrier_group ) %>%
+       .$pred
+    #Model test
+     nineth_model <- SI(test_set$FREIGHT,predicted)
+  #Saving results
+     si_results <- bind_rows(si_results,tibble(method="Nineth Model - Added Airline Class", SI = nineth_model ))
+     
+
+# Overall results
+      options(pillar.sigfig=5)
+      print(si_results)
